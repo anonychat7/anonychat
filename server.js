@@ -18,10 +18,10 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: ["'self'", "ws:", "wss:"],
-      fontSrc: ["'self'", "https://cdnjs.cloudflare.com"],
+      fontSrc: ["'self'"],
     }
   }
 }));
@@ -231,7 +231,8 @@ io.on('connection', (socket) => {
       if (sess.mode === 'pair' && sess.room) {
         const partnerSid = pairings.get(sessionId);
         const partnerSess = partnerSid ? sessions.get(partnerSid) : null;
-        if (partnerSess && partnerSess.socketId) {
+        const partnerLive = partnerSess && partnerSess.socketId && io.sockets.sockets.get(partnerSess.socketId);
+        if (partnerLive) {
           currentRoom = sess.room;
           socket.join(currentRoom);
           socket.data.room = currentRoom;
@@ -240,9 +241,15 @@ io.on('connection', (socket) => {
           io.to(currentRoom).emit('presence', 2);
           resumed = true;
         } else {
+          if (partnerSid) { pairings.delete(sessionId); pairings.delete(partnerSid); }
           sessions.delete(sessionId);
           sessionId = null;
         }
+      } else if (sess.mode === 'matching') {
+        const idx = waitingQueue.indexOf(sess.socketId);
+        if (idx !== -1) waitingQueue.splice(idx, 1);
+        sessions.delete(sessionId);
+        sessionId = null;
       } else {
         sessions.delete(sessionId);
         sessionId = null;
@@ -262,6 +269,11 @@ io.on('connection', (socket) => {
     if (isBanned(ip)) { socket.emit('banned', bans[ip]); socket.disconnect(true); return; }
     if (currentRoom) { socket.leave(currentRoom); currentRoom = null; }
     socket.data.mode = 'matching';
+    if (sessionId && sessions.has(sessionId)) {
+      const s = sessions.get(sessionId);
+      s.mode = 'matching';
+      s.room = null;
+    }
 
     const partnerSocket = tryMatch(socket);
     if (partnerSocket) {
@@ -310,6 +322,11 @@ io.on('connection', (socket) => {
     const idx = waitingQueue.indexOf(socket.id);
     if (idx !== -1) waitingQueue.splice(idx, 1);
     socket.data.mode = null;
+    if (sessionId && sessions.has(sessionId)) {
+      const s = sessions.get(sessionId);
+      s.mode = null;
+      s.room = null;
+    }
   });
 
   socket.on('exit-session', () => {
