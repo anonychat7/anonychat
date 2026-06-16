@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AnonyChat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="screen-login" class="screen active">
+  <button id="theme-toggle" class="theme-toggle" title="toggle theme">◐</button>
+  <div class="login-box">
+    <div class="logo">
+      <span class="logo-bracket">[</span><span class="logo-text">ANONY<span class="logo-accent">CHAT</span></span><span class="logo-bracket">]</span>
+    </div>
+    <p class="tagline">built for strangers, by a stranger</p>
+
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="room">channel</button>
+      <button class="mode-tab" data-mode="stranger">random stranger</button>
+    </div>
+
+    <div id="mode-room" class="mode-panel active">
+      <div class="field">
+        <label for="room-input">channel name</label>
+        <input id="room-input" type="text" placeholder="lobby" maxlength="32" autocomplete="off">
+      </div>
+      <button id="connect-btn" class="btn-primary">connect_</button>
+    </div>
+
+    <div id="mode-stranger" class="mode-panel">
+      <p class="mode-desc">get matched 1-on-1 with a random stranger. no names, no history.</p>
+      <button id="find-btn" class="btn-primary">find a stranger_</button>
+    </div>
+
+    <button id="about-btn" class="link-btn">about this place</button>
+  </div>
+</div>
+
+<!-- ABOUT SCREEN -->
+<div id="screen-about" class="screen">
+  <div class="about-box">
+    <button id="about-back" class="back-btn">‹ back</button>
+    <h1>about</h1>
+    <p>AnonyChat is a small room on the internet with no names, no
+    profiles, and no history that follows you home.</p>
+    <p>Pick a channel and talk with whoever's there, or hit "random
+    stranger" for a 1-on-1 with someone new. You get a random handle
+    on arrival. When you close the tab, you're gone — like you were
+    never here.</p>
+    <p class="signature">built for strangers, by a stranger.</p>
+    <div class="status-row">
+      <span class="dot dot-live"></span>
+      <span id="conn-status">checking connection…</span>
+    </div>
+  </div>
+</div>
+
+<!-- SEARCHING SCREEN -->
+<div id="screen-searching" class="screen">
+  <div class="searching-box">
+    <div class="radar">
+      <div class="radar-ring"></div>
+      <div class="radar-ring delay1"></div>
+      <div class="radar-ring delay2"></div>
+      <div class="radar-dot"></div>
+    </div>
+    <p class="searching-text">looking for a stranger…</p>
+    <button id="cancel-search-btn" class="link-btn">cancel</button>
+  </div>
+</div>
+
+<!-- CHAT SCREEN -->
+<div id="screen-chat" class="screen">
+  <header class="chat-header">
+    <div class="header-left">
+      <span class="logo-small">ANONY<span class="logo-accent">CHAT</span></span>
+      <span class="room-tag" id="room-name">#lobby</span>
+    </div>
+    <div class="header-right">
+      <span class="presence"><span class="dot dot-live"></span><span id="presence-count">1</span></span>
+      <button id="skip-btn" class="skip-btn" title="next stranger" hidden>skip ⏭</button>
+      <button id="leave-btn" title="leave">⏻</button>
+    </div>
+  </header>
+
+  <div id="messages" class="messages"></div>
+
+  <div id="typing-indicator" class="typing-indicator"></div>
+
+  <div id="emoji-picker" class="emoji-picker"></div>
+
+  <form id="composer" class="composer">
+    <button type="button" id="emoji-btn" class="icon-btn" title="emoji">🙂</button>
+    <button type="button" id="image-btn" class="icon-btn" title="send image">📎</button>
+    <input type="file" id="image-input" accept="image/*" hidden>
+    <input type="text" id="text-input" placeholder="say something..." autocomplete="off" maxlength="2000">
+    <button type="submit" class="send-btn">send</button>
+  </form>
+
+  <div id="image-preview" class="image-preview"></div>
+</div>
+
+<!-- IMAGE LIGHTBOX -->
+<div id="lightbox" class="lightbox">
+  <img id="lightbox-img" src="" alt="">
+</div>
+
+<!-- REACTION PICKER (popover) -->
+<div id="reaction-popover" class="reaction-popover"></div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
