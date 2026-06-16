@@ -129,7 +129,7 @@ const upload = multer({
   }
 });
 
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d', etag: true }));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true }));
 
 app.post('/upload', (req, res) => {
   const ip = getClientIp(req);
