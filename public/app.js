@@ -4,6 +4,7 @@
     about: document.getElementById('screen-about'),
     searching: document.getElementById('screen-searching'),
     chat: document.getElementById('screen-chat'),
+    banned: document.getElementById('screen-banned'),
   };
 
   function showScreen(name) {
@@ -25,15 +26,6 @@
     applyTheme(next);
   });
 
-  document.querySelectorAll('.mode-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.mode-panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('mode-' + tab.dataset.mode).classList.add('active');
-    });
-  });
-
   document.getElementById('about-btn').addEventListener('click', () => {
     showScreen('about');
     checkConn();
@@ -46,26 +38,42 @@
       .catch(() => { el.textContent = 'server unreachable'; });
   }
 
-  function getSessionId() {
-    try { return localStorage.getItem('anonychat-session') || null; } catch { return null; }
+  function getSessionId() { try { return localStorage.getItem('anonychat-session') || null; } catch { return null; } }
+  function setSessionId(id) { try { localStorage.setItem('anonychat-session', id); } catch {} }
+  function clearSessionId() { try { localStorage.removeItem('anonychat-session'); } catch {} }
+
+  const SEARCH_LINES = [
+    'looking for someone to talk to…',
+    'scanning the crowd…',
+    'still searching…',
+    'this might take a moment…',
+    'almost there…',
+    'finding someone new…',
+  ];
+  let searchLineInterval = null;
+  function startSearchLines() {
+    const el = document.getElementById('searching-line');
+    let i = 0;
+    el.style.opacity = 1;
+    el.textContent = SEARCH_LINES[0];
+    clearInterval(searchLineInterval);
+    searchLineInterval = setInterval(() => {
+      i = (i + 1) % SEARCH_LINES.length;
+      el.style.opacity = 0;
+      setTimeout(() => { el.textContent = SEARCH_LINES[i]; el.style.opacity = 1; }, 280);
+    }, 2600);
   }
-  function setSessionId(id) {
-    try { localStorage.setItem('anonychat-session', id); } catch {}
-  }
-  function clearSessionId() {
-    try { localStorage.removeItem('anonychat-session'); } catch {}
-  }
+  function stopSearchLines() { clearInterval(searchLineInterval); }
 
   let socket = null;
   let myNickname = '';
   let pendingImage = null;
   let typingTimeout = null;
-  let currentMode = 'room';
   let socketReady = false;
 
   function initSocket(cb) {
     if (socket && socketReady) { if (cb) cb(); return; }
-    if (socket) { if (cb) socket.once('session-ready', cb); return; }
+    if (socket) { if (cb) socket.once('session-ready-cb', cb); return; }
 
     socket = io({ transports: ['websocket', 'polling'] });
 
@@ -73,58 +81,91 @@
       socket.emit('resume-session', getSessionId());
     });
 
+    socket.on('connect_error', (err) => {
+      if (err && err.message === 'banned') {
+        showBannedScreen({});
+      } else {
+        showToast('connection failed');
+      }
+    });
+
     socket.on('session', ({ sessionId }) => {
       setSessionId(sessionId);
       socketReady = true;
-      socket.emit('session-ready');
       if (cb) { cb(); cb = null; }
     });
 
     socket.on('joined', (data) => {
       socketReady = true;
       myNickname = data.nickname;
-      currentMode = data.mode;
-      const roomLabel = data.mode === 'pair' ? 'stranger' : data.room;
-      document.getElementById('room-name').textContent = '#' + roomLabel;
-      document.getElementById('skip-btn').hidden = data.mode !== 'pair';
-      if (!data.resumed) document.getElementById('messages').innerHTML = '';
-      data.history.forEach(renderMessage);
+      stopSearchLines();
+      document.getElementById('skip-btn').hidden = false;
+      document.getElementById('messages').innerHTML = '';
       showScreen('chat');
-      scrollToBottom();
       if (data.resumed) showToast('reconnected');
-      if (cb) { cb = null; }
+      if (cb) cb = null;
     });
 
-    socket.on('searching', () => showScreen('searching'));
+    socket.on('searching', () => {
+      showScreen('searching');
+      startSearchLines();
+    });
 
     socket.on('find-stranger-ack', () => socket.emit('find-stranger'));
 
     socket.on('stranger-left', () => {
       showToast('stranger disconnected');
-      renderSystem('the stranger left. searching for someone new...');
+      renderSystem('the stranger left. finding someone new…');
       socket.emit('find-stranger');
     });
 
     socket.on('message', (msg) => { renderMessage(msg); scrollToBottom(); });
     socket.on('system', (text) => { renderSystem(text); scrollToBottom(); });
-    socket.on('presence', (count) => { document.getElementById('presence-count').textContent = count; });
+    socket.on('presence', () => {});
 
-    socket.on('typing', (name) => {
+    socket.on('typing', () => {
       const el = document.getElementById('typing-indicator');
-      el.textContent = name + ' is typing...';
+      el.textContent = 'stranger is typing…';
       clearTimeout(typingTimeout);
       typingTimeout = setTimeout(() => { el.textContent = ''; }, 1800);
     });
 
-    socket.on('reaction-update', ({ id, counts }) => updateReactions(id, counts));
-    socket.on('disconnect', () => { socketReady = false; showToast('disconnected - reconnecting...'); });
-    socket.on('connect_error', () => showToast('connection failed'));
+    socket.on('moderation-warning', ({ message }) => {
+      showWarningBanner(message);
+    });
+
+    socket.on('banned', (info) => {
+      showBannedScreen(info);
+    });
+
+    socket.on('disconnect', () => { socketReady = false; });
   }
 
-  // Auto-resume on load if session exists
   window.addEventListener('load', () => {
     if (getSessionId()) initSocket();
   });
+
+  function showWarningBanner(message) {
+    const el = document.getElementById('warning-banner');
+    document.getElementById('warning-text').textContent = '⚠ ' + message;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 6000);
+  }
+
+  function showBannedScreen(info) {
+    const msgEl = document.getElementById('banned-message');
+    if (info.permanent) {
+      msgEl.textContent = "You've been permanently banned from AnonyChat for repeated violations of our rules against threats of violence.";
+    } else if (info.bannedUntil) {
+      const until = new Date(info.bannedUntil);
+      msgEl.textContent = "You've been temporarily banned from AnonyChat until " + until.toLocaleString() + " due to a violation of our rules against threats of violence.";
+    } else {
+      msgEl.textContent = "You've been restricted from AnonyChat due to a violation of our rules.";
+    }
+    clearSessionId();
+    if (socket) { socket.disconnect(); socket = null; socketReady = false; }
+    showScreen('banned');
+  }
 
   function renderSystem(text) {
     const el = document.createElement('div');
@@ -136,12 +177,11 @@
   function renderMessage(msg) {
     const wrap = document.createElement('div');
     wrap.className = 'msg ' + (msg.from === myNickname ? 'mine' : 'theirs');
-    wrap.dataset.id = msg.id;
 
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
     const time = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.textContent = (msg.from === myNickname ? 'you' : msg.from) + ' . ' + time;
+    meta.textContent = (msg.from === myNickname ? 'you' : 'stranger') + ' · ' + time;
     wrap.appendChild(meta);
 
     if (msg.image) {
@@ -150,10 +190,6 @@
       img.src = msg.image;
       img.loading = 'lazy';
       img.addEventListener('click', () => openLightbox(msg.image));
-      img.addEventListener('contextmenu', (e) => { e.preventDefault(); openReactionPicker(e, msg.id); });
-      let pt;
-      img.addEventListener('touchstart', (e) => { pt = setTimeout(() => openReactionPicker(e, msg.id), 450); });
-      img.addEventListener('touchend', () => clearTimeout(pt));
       wrap.appendChild(img);
     }
 
@@ -161,33 +197,10 @@
       const bubble = document.createElement('div');
       bubble.className = 'bubble';
       bubble.textContent = msg.text;
-      bubble.addEventListener('contextmenu', (e) => { e.preventDefault(); openReactionPicker(e, msg.id); });
-      let pt;
-      bubble.addEventListener('touchstart', (e) => { pt = setTimeout(() => openReactionPicker(e, msg.id), 450); });
-      bubble.addEventListener('touchend', () => clearTimeout(pt));
-      bubble.addEventListener('dblclick', (e) => openReactionPicker(e, msg.id));
       wrap.appendChild(bubble);
     }
 
-    const reactionsRow = document.createElement('div');
-    reactionsRow.className = 'reactions-row';
-    wrap.appendChild(reactionsRow);
-
     document.getElementById('messages').appendChild(wrap);
-  }
-
-  function updateReactions(msgId, counts) {
-    const wrap = document.querySelector('.msg[data-id="' + msgId + '"]');
-    if (!wrap) return;
-    const row = wrap.querySelector('.reactions-row');
-    row.innerHTML = '';
-    for (const [emoji, count] of Object.entries(counts)) {
-      const chip = document.createElement('div');
-      chip.className = 'reaction-chip';
-      chip.textContent = emoji + ' ' + count;
-      chip.addEventListener('click', () => socket.emit('reaction', { id: msgId, emoji }));
-      row.appendChild(chip);
-    }
   }
 
   function scrollToBottom() {
@@ -195,65 +208,23 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
-  const reactionPopover = document.getElementById('reaction-popover');
-
-  function openReactionPicker(e, msgId) {
-    e.preventDefault();
-    reactionPopover.innerHTML = '';
-    REACTION_EMOJIS.forEach(emoji => {
-      const btn = document.createElement('button');
-      btn.textContent = emoji;
-      btn.addEventListener('click', () => {
-        socket.emit('reaction', { id: msgId, emoji });
-        reactionPopover.classList.remove('active');
-      });
-      reactionPopover.appendChild(btn);
-    });
-    const x = e.touches ? e.touches[0].clientX : e.clientX;
-    const y = e.touches ? e.touches[0].clientY : e.clientY;
-    reactionPopover.style.left = Math.min(x, window.innerWidth - 260) + 'px';
-    reactionPopover.style.top = Math.max(y - 60, 10) + 'px';
-    reactionPopover.classList.add('active');
-  }
-  document.addEventListener('click', (e) => {
-    if (!reactionPopover.contains(e.target)) reactionPopover.classList.remove('active');
-  });
-
-  // Connect: room mode
-  document.getElementById('connect-btn').addEventListener('click', () => {
-    const room = document.getElementById('room-input').value.trim() || 'lobby';
-    initSocket(() => socket.emit('join', room));
-  });
-  document.getElementById('room-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('connect-btn').click();
-  });
-
-  // Connect: stranger mode
   document.getElementById('find-btn').addEventListener('click', () => {
     initSocket(() => socket.emit('find-stranger'));
   });
 
-  // Cancel search — just go back, remove from queue on server side via disconnect grace
   document.getElementById('cancel-search-btn').addEventListener('click', () => {
-    if (socket) {
-      socket.emit('exit-session');
-      socket.disconnect();
-      socket = null;
-      socketReady = false;
-    }
-    clearSessionId();
+    stopSearchLines();
+    if (socket) socket.emit('cancel-search');
     showScreen('login');
   });
 
-  // Skip stranger
   document.getElementById('skip-btn').addEventListener('click', () => {
     document.getElementById('messages').innerHTML = '';
     if (socket) socket.emit('skip-stranger');
     showScreen('searching');
+    startSearchLines();
   });
 
-  // Leave (explicit exit)
   document.getElementById('leave-btn').addEventListener('click', () => {
     if (socket) {
       socket.emit('exit-session');
@@ -271,8 +242,6 @@
   const imageBtn = document.getElementById('image-btn');
   const imageInput = document.getElementById('image-input');
   const imagePreview = document.getElementById('image-preview');
-  const emojiBtn = document.getElementById('emoji-btn');
-  const emojiPicker = document.getElementById('emoji-picker');
 
   textInput.addEventListener('input', () => { if (socket) socket.emit('typing'); });
   imageBtn.addEventListener('click', () => imageInput.click());
@@ -280,8 +249,8 @@
   imageInput.addEventListener('change', async () => {
     const file = imageInput.files[0];
     if (!file) return;
-    if (file.size > 6 * 1024 * 1024) { showToast('image too large (max 6MB)'); imageInput.value = ''; return; }
-    showToast('uploading...');
+    if (file.size > 4 * 1024 * 1024) { showToast('image too large (max 4MB)'); imageInput.value = ''; return; }
+    showToast('uploading…');
     const fd = new FormData();
     fd.append('image', file);
     try {
@@ -304,8 +273,11 @@
         });
         imagePreview.appendChild(removeBtn);
         imagePreview.classList.add('active');
-        showToast('image attached');
-      } else { showToast('upload failed'); }
+      } else if (res.status === 403) {
+        showToast('you are banned');
+      } else {
+        showToast('upload failed');
+      }
     } catch { showToast('upload failed'); }
   });
 
@@ -320,22 +292,6 @@
     imagePreview.classList.remove('active');
     imagePreview.innerHTML = '';
     imageInput.value = '';
-    emojiPicker.classList.remove('active');
-  });
-
-  const EMOJI_LIST = ['😀','😂','😍','😎','🤔','😢','😡','😮','👍','👎','❤️','🔥','🎉','🙏','💀','😴','🥳','😏','😱','🤡','👀','✨','💯','🤝','😅','🙃','😬','🫠','🤯','😈','👻','🤖'];
-
-  emojiBtn.addEventListener('click', () => {
-    if (emojiPicker.classList.contains('active')) { emojiPicker.classList.remove('active'); return; }
-    emojiPicker.innerHTML = '';
-    EMOJI_LIST.forEach(emoji => {
-      const btn = document.createElement('button');
-      btn.textContent = emoji;
-      btn.type = 'button';
-      btn.addEventListener('click', () => { textInput.value += emoji; textInput.focus(); });
-      emojiPicker.appendChild(btn);
-    });
-    emojiPicker.classList.add('active');
   });
 
   const lightbox = document.getElementById('lightbox');

@@ -8,49 +8,47 @@
 </head>
 <body>
 
-<!-- LOGIN SCREEN -->
 <div id="screen-login" class="screen active">
   <button id="theme-toggle" class="theme-toggle" title="toggle theme">◐</button>
-  <div class="login-box">
-    <div class="logo">
-      <span class="logo-bracket">[</span><span class="logo-text">ANONY<span class="logo-accent">CHAT</span></span><span class="logo-bracket">]</span>
-    </div>
-    <p class="tagline">built for strangers, by a stranger</p>
 
-    <div class="mode-tabs">
-      <button class="mode-tab active" data-mode="room">channel</button>
-      <button class="mode-tab" data-mode="stranger">random stranger</button>
+  <div class="login-wrap">
+    <div class="brand">
+      <div class="brand-orb"></div>
+      <h1 class="brand-title">anonychat</h1>
+      <p class="brand-tag">talk to someone new. no names, no traces.</p>
     </div>
 
-    <div id="mode-room" class="mode-panel active">
-      <div class="field">
-        <label for="room-input">channel name</label>
-        <input id="room-input" type="text" placeholder="lobby" maxlength="32" autocomplete="off">
-      </div>
-      <button id="connect-btn" class="btn-primary">connect_</button>
-    </div>
+    <button id="find-btn" class="btn-find">
+      <span class="btn-find-label">find a stranger</span>
+      <span class="btn-find-sub">tap to connect</span>
+    </button>
 
-    <div id="mode-stranger" class="mode-panel">
-      <p class="mode-desc">get matched 1-on-1 with a random stranger. no names, no history.</p>
-      <button id="find-btn" class="btn-primary">find a stranger_</button>
-    </div>
-
-    <button id="about-btn" class="link-btn">about this place</button>
+    <button id="about-btn" class="link-btn">what is this?</button>
   </div>
 </div>
 
-<!-- ABOUT SCREEN -->
 <div id="screen-about" class="screen">
-  <div class="about-box">
-    <button id="about-back" class="back-btn">‹ back</button>
-    <h1>about</h1>
-    <p>AnonyChat is a small room on the internet with no names, no
-    profiles, and no history that follows you home.</p>
-    <p>Pick a channel and talk with whoever's there, or hit "random
-    stranger" for a 1-on-1 with someone new. You get a random handle
-    on arrival. When you close the tab, you're gone — like you were
-    never here.</p>
-    <p class="signature">built for strangers, by a stranger.</p>
+  <div class="about-wrap">
+    <button id="about-back" class="back-btn">‹</button>
+    <h2 class="about-title">about anonychat</h2>
+
+    <div class="about-card">
+      <p><span class="hl">No accounts.</span> No phone numbers. No history that
+      follows you anywhere. Tap one button and you're talking to a real
+      stranger, somewhere else, right now.</p>
+    </div>
+
+    <div class="about-card">
+      <p><span class="hl">Built for strangers, by a stranger.</span>
+      This whole thing started as a side project - something simple,
+      something honest. A place to talk without the weight of a profile.</p>
+    </div>
+
+    <div class="about-card">
+      <p><span class="hl">Be decent.</span> Threats of violence or harm get
+      you warned once, then banned. Everything else is fair game.</p>
+    </div>
+
     <div class="status-row">
       <span class="dot dot-live"></span>
       <span id="conn-status">checking connection…</span>
@@ -58,31 +56,34 @@
   </div>
 </div>
 
-<!-- SEARCHING SCREEN -->
 <div id="screen-searching" class="screen">
-  <div class="searching-box">
+  <div class="searching-wrap">
     <div class="radar">
       <div class="radar-ring"></div>
       <div class="radar-ring delay1"></div>
       <div class="radar-ring delay2"></div>
       <div class="radar-dot"></div>
     </div>
-    <p class="searching-text">looking for a stranger…</p>
-    <button id="cancel-search-btn" class="link-btn">cancel</button>
+    <p id="searching-line" class="searching-text">looking for someone to talk to…</p>
+    <button id="cancel-search-btn" class="btn-cancel">cancel</button>
   </div>
 </div>
 
-<!-- CHAT SCREEN -->
 <div id="screen-chat" class="screen">
   <header class="chat-header">
     <div class="header-left">
-      <span class="logo-small">ANONY<span class="logo-accent">CHAT</span></span>
-      <span class="room-tag" id="room-name">#lobby</span>
+      <span class="presence-dot dot-live"></span>
+      <span class="header-label">stranger</span>
     </div>
     <div class="header-right">
-      <span class="presence"><span class="dot dot-live"></span><span id="presence-count">1</span></span>
-      <button id="skip-btn" class="skip-btn" title="next stranger" hidden>skip ⏭</button>
-      <button id="leave-btn" title="leave">⏻</button>
+      <button id="skip-btn" class="skip-btn" title="next stranger">next ⏭</button>
+      <button id="leave-btn" class="exit-btn" title="leave">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+          <polyline points="16 17 21 12 16 7"></polyline>
+          <line x1="21" y1="12" x2="9" y2="12"></line>
+        </svg>
+      </button>
     </div>
   </header>
 
@@ -90,26 +91,41 @@
 
   <div id="typing-indicator" class="typing-indicator"></div>
 
-  <div id="emoji-picker" class="emoji-picker"></div>
-
   <form id="composer" class="composer">
-    <button type="button" id="emoji-btn" class="icon-btn" title="emoji">🙂</button>
-    <button type="button" id="image-btn" class="icon-btn" title="send image">📎</button>
+    <button type="button" id="image-btn" class="icon-btn" title="send image">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+    </button>
     <input type="file" id="image-input" accept="image/*" hidden>
-    <input type="text" id="text-input" placeholder="say something..." autocomplete="off" maxlength="2000">
-    <button type="submit" class="send-btn">send</button>
+    <input type="text" id="text-input" placeholder="type a message…" autocomplete="off" maxlength="2000">
+    <button type="submit" class="send-btn">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+        <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"></path>
+      </svg>
+    </button>
   </form>
 
   <div id="image-preview" class="image-preview"></div>
 </div>
 
-<!-- IMAGE LIGHTBOX -->
+<div id="screen-banned" class="screen">
+  <div class="banned-wrap">
+    <div class="banned-icon">⛔</div>
+    <h2>access restricted</h2>
+    <p id="banned-message">You've been temporarily restricted from AnonyChat due to a violation of our rules against threats of violence.</p>
+  </div>
+</div>
+
+<div id="warning-banner" class="warning-banner">
+  <span id="warning-text"></span>
+</div>
+
 <div id="lightbox" class="lightbox">
   <img id="lightbox-img" src="" alt="">
 </div>
-
-<!-- REACTION PICKER (popover) -->
-<div id="reaction-popover" class="reaction-popover"></div>
 
 <div id="toast" class="toast"></div>
 
