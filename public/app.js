@@ -26,17 +26,8 @@
     applyTheme(next);
   });
 
-  document.getElementById('about-btn').addEventListener('click', () => {
-    showScreen('about');
-    checkConn();
-  });
+  document.getElementById('about-btn').addEventListener('click', () => showScreen('about'));
   document.getElementById('about-back').addEventListener('click', () => showScreen('login'));
-
-  function checkConn() {
-    const el = document.getElementById('conn-status');
-    fetch('/').then(() => { el.textContent = 'server is online'; })
-      .catch(() => { el.textContent = 'server unreachable'; });
-  }
 
   function getSessionId() { try { return localStorage.getItem('anonychat-session') || null; } catch { return null; } }
   function setSessionId(id) { try { localStorage.setItem('anonychat-session', id); } catch {} }
@@ -66,10 +57,11 @@
   function stopSearchLines() { clearInterval(searchLineInterval); }
 
   let socket = null;
-  let myNickname = '';
   let pendingImage = null;
   let typingTimeout = null;
   let socketReady = false;
+  let myNickname = '';
+  let partnerNickname = 'stranger';
 
   function initSocket(cb) {
     if (socket && socketReady) { if (cb) cb(); return; }
@@ -97,8 +89,10 @@
 
     socket.on('joined', (data) => {
       socketReady = true;
-      myNickname = data.nickname;
       stopSearchLines();
+      myNickname = data.nickname || '';
+      partnerNickname = data.partnerNickname || 'stranger';
+      document.getElementById('header-label').textContent = partnerNickname;
       document.getElementById('skip-btn').hidden = false;
       document.getElementById('messages').innerHTML = '';
       showScreen('chat');
@@ -125,19 +119,13 @@
 
     socket.on('typing', () => {
       const el = document.getElementById('typing-indicator');
-      el.textContent = 'stranger is typing…';
+      el.textContent = partnerNickname + ' is typing…';
       clearTimeout(typingTimeout);
       typingTimeout = setTimeout(() => { el.textContent = ''; }, 1800);
     });
 
-    socket.on('moderation-warning', ({ message }) => {
-      showWarningBanner(message);
-    });
-
-    socket.on('banned', (info) => {
-      showBannedScreen(info);
-    });
-
+    socket.on('moderation-warning', ({ message }) => showWarningBanner(message));
+    socket.on('banned', (info) => showBannedScreen(info));
     socket.on('disconnect', () => { socketReady = false; });
   }
 
@@ -154,7 +142,9 @@
 
   function showBannedScreen(info) {
     const msgEl = document.getElementById('banned-message');
-    if (info.permanent) {
+    if (info.severe) {
+      msgEl.textContent = "You've been permanently banned from AnonyChat for sharing content involving child exploitation. This is a zero-tolerance violation.";
+    } else if (info.permanent) {
       msgEl.textContent = "You've been permanently banned from AnonyChat for repeated violations of our rules against threats of violence.";
     } else if (info.bannedUntil) {
       const until = new Date(info.bannedUntil);
@@ -176,12 +166,12 @@
 
   function renderMessage(msg) {
     const wrap = document.createElement('div');
-    wrap.className = 'msg ' + (msg.from === myNickname ? 'mine' : 'theirs');
+    wrap.className = 'msg ' + (msg.mine ? 'mine' : 'theirs');
 
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
     const time = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.textContent = (msg.from === myNickname ? 'you' : 'stranger') + ' · ' + time;
+    meta.textContent = (msg.mine ? 'you' : (msg.nickname || partnerNickname)) + ' · ' + time;
     wrap.appendChild(meta);
 
     if (msg.image) {

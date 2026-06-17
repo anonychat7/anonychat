@@ -46,10 +46,9 @@
 
     <div class="about-card">
       <p><span class="hl">Be decent.</span> Threats of violence or harm get
-      you warned once, then banned. Everything else is fair game.</p>
+      you warned once, then banned. Content involving child exploitation
+      results in an instant permanent ban. Everything else is fair game.</p>
     </div>
-
-    
   </div>
 </div>
 
@@ -70,7 +69,7 @@
   <header class="chat-header">
     <div class="header-left">
       <span class="presence-dot dot-live"></span>
-      <span class="header-label">stranger</span>
+      <span class="header-label" id="header-label">stranger</span>
     </div>
     <div class="header-right">
       <button id="skip-btn" class="skip-btn" title="next stranger">next ⏭</button>
@@ -97,7 +96,7 @@
       </svg>
     </button>
     <input type="file" id="image-input" accept="image/*" hidden>
-    <input type="text" id="text-input" placeholder="type a message…" autocomplete="off" maxlength="2000">
+    <input type="text" id="text-input" placeholder="type a message…" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" name="chat-message-not-a-form-field" maxlength="2000">
     <button type="submit" class="send-btn">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
         <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"></path>

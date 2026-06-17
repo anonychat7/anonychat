@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const xss = require('xss');
+const { Redis } = require('@upstash/redis');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -39,15 +40,33 @@ const io = new Server(server, {
 const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const BANS_FILE = path.join(__dirname, 'bans.json');
+let redis = null;
+if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+  redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+  console.log('Upstash Redis connected - bans will persist across restarts');
+} else {
+  console.warn('UPSTASH credentials missing - bans will NOT persist across restarts (in-memory fallback)');
+}
 
-function loadBans() {
-  try { return JSON.parse(fs.readFileSync(BANS_FILE, 'utf8')); } catch { return {}; }
+const memBans = new Map();
+
+async function getBan(ip) {
+  if (redis) {
+    const data = await redis.get('ban:' + ip);
+    return data || null;
+  }
+  return memBans.get(ip) || null;
 }
-function saveBans(bans) {
-  try { fs.writeFileSync(BANS_FILE, JSON.stringify(bans)); } catch (e) { console.error('ban save failed', e); }
+async function setBan(ip, rec) {
+  if (redis) {
+    await redis.set('ban:' + ip, rec);
+  } else {
+    memBans.set(ip, rec);
+  }
 }
-let bans = loadBans();
 
 function getClientIp(req) {
   const fwd = req.headers['x-forwarded-for'];
@@ -55,8 +74,8 @@ function getClientIp(req) {
   return req.socket.remoteAddress || 'unknown';
 }
 
-function isBanned(ip) {
-  const rec = bans[ip];
+async function isBanned(ip) {
+  const rec = await getBan(ip);
   if (!rec) return false;
   if (rec.bannedUntil === null) return true;
   if (rec.bannedUntil && Date.now() < rec.bannedUntil) return true;
@@ -69,19 +88,59 @@ function banDurationForOffense(offenseCount) {
   return null;
 }
 
-function recordOffense(ip) {
-  if (!bans[ip]) bans[ip] = { offenses: 0, bannedUntil: 0, warned: false };
-  const rec = bans[ip];
+async function recordOffense(ip) {
+  let rec = await getBan(ip);
+  if (!rec) rec = { offenses: 0, bannedUntil: 0, warned: false };
   rec.offenses += 1;
+
   if (rec.offenses === 1) {
     rec.warned = true;
-    saveBans(bans);
+    await setBan(ip, rec);
     return { action: 'warn' };
   }
   const duration = banDurationForOffense(rec.offenses);
   rec.bannedUntil = duration ? Date.now() + duration : null;
-  saveBans(bans);
+  await setBan(ip, rec);
   return { action: 'ban', permanent: duration === null, until: rec.bannedUntil };
+}
+
+async function instantPermanentBan(ip) {
+  let rec = await getBan(ip);
+  if (!rec) rec = { offenses: 0, bannedUntil: 0, warned: false };
+  rec.offenses += 10;
+  rec.bannedUntil = null;
+  await setBan(ip, rec);
+}
+
+const ADMIN_KEY = process.env.ADMIN_KEY || null;
+
+app.get('/admin/unban', async (req, res) => {
+  if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) return res.status(403).send('forbidden');
+  const ip = req.query.ip || getClientIp(req);
+  if (redis) await redis.del('ban:' + ip);
+  else memBans.delete(ip);
+  res.send('unbanned: ' + ip);
+});
+
+app.get('/admin/banstatus', async (req, res) => {
+  if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) return res.status(403).send('forbidden');
+  const ip = req.query.ip || getClientIp(req);
+  const rec = await getBan(ip);
+  res.json({ ip, record: rec || null });
+});
+
+const SEVERE_PATTERNS = [
+  /child\s*p[o0]rn/i,
+  /\bcp\b.{0,15}\b(pic|video|link|trade|share)/i,
+  /\bloli(ta)?\b.{0,10}\b(sex|nude|porn)/i,
+  /\bunderage\b.{0,15}\b(sex|nude|porn|pic)/i,
+  /\bchild\b.{0,15}\b(sex|nude|porn|abuse)/i,
+  /\bminor\b.{0,15}\b(sex|nude|porn)/i,
+  /\bpedo/i,
+];
+
+function detectSevere(text) {
+  return SEVERE_PATTERNS.some(p => p.test(text));
 }
 
 const THREAT_PATTERNS = [
@@ -93,6 +152,15 @@ const THREAT_PATTERNS = [
   /\bi\s*(?:will|'?ll)\s*bomb\b/i,
   /\bhow\s*to\s*(?:make|build)\s*a\s*bomb\b/i,
   /\bhow\s*to\s*kill\s*(?:someone|a person|people)\b/i,
+  /\bmurder\b/i,
+  /\bbeheading\b/i,
+  /\bbehead(?:ing)?\s*(?:you|him|her|them|u)?\b/i,
+  /\bi'?ll?\s*murder\b/i,
+  /\bgonna\s*murder\b/i,
+  /\bslaughter\b/i,
+  /\bmassacre\b/i,
+  /\bi\s*want\s*to\s*kill\b/i,
+  /\b(?:k|c)\s*[i1!]\s*ll\b.{0,10}\b(you|u|him|her|them)\b/i,
 ];
 
 function detectThreat(text) {
@@ -131,9 +199,10 @@ const upload = multer({
 
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true }));
 
-app.post('/upload', (req, res) => {
+app.post('/upload', async (req, res) => {
   const ip = getClientIp(req);
-  if (isBanned(ip)) return res.status(403).json({ error: 'banned' });
+  if (await isBanned(ip)) return res.status(403).json({ error: 'banned' });
+
   upload.single('image')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
     if (!req.file) return res.status(400).json({ error: 'No image' });
@@ -154,10 +223,10 @@ const GRACE_MS = 45000;
 const MSG_RATE_LIMIT = 20;
 const MSG_RATE_WINDOW = 10000;
 
-const adjectives = ['Mysterious','Silent','Curious','Hidden','Lone','Shadow','Quiet','Wandering','Unknown','Masked','Drifting','Nameless','Cryptic','Phantom','Velvet'];
-const nouns = ['Fox','Owl','Wolf','Raven','Tiger','Ghost','Falcon','Panther','Cobra','Eagle','Lynx','Otter','Hawk','Crow','Stag'];
+const adjectives = ['Mysterious','Silent','Curious','Hidden','Lone','Shadow','Quiet','Wandering','Unknown','Masked','Drifting','Nameless','Cryptic','Phantom','Velvet','Electric','Wild','Frozen','Golden','Crimson'];
+const nouns = ['Fox','Owl','Wolf','Raven','Tiger','Ghost','Falcon','Panther','Cobra','Eagle','Lynx','Otter','Hawk','Crow','Stag','Dragon','Phoenix','Viper','Shark','Wraith'];
 
-function randomName() {
+function randomNickname() {
   return adjectives[Math.floor(Math.random()*adjectives.length)] + nouns[Math.floor(Math.random()*nouns.length)] + Math.floor(Math.random()*99);
 }
 
@@ -185,7 +254,10 @@ function tryMatch(socket) {
   while (waitingQueue.length) {
     const candidateId = waitingQueue[0];
     const candidateSocket = io.sockets.sockets.get(candidateId);
-    if (!candidateSocket || candidateId === socket.id) { waitingQueue.shift(); continue; }
+    if (!candidateSocket || candidateId === socket.id || candidateSocket.data.mode !== 'matching') {
+      waitingQueue.shift();
+      continue;
+    }
     waitingQueue.shift();
     return candidateSocket;
   }
@@ -201,32 +273,31 @@ function clearPairing(sid) {
 
 setInterval(() => {}, 1000*60*14);
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const ip = getClientIp(socket.request);
   socket.data.ip = ip;
-  if (isBanned(ip)) return next(new Error('banned'));
+  if (await isBanned(ip)) return next(new Error('banned'));
   next();
 });
 
 io.on('connection', (socket) => {
-  let nickname = randomName();
   let currentRoom = null;
   let sessionId = null;
   let resumed = false;
   const ip = socket.data.ip;
+  socket.data.nickname = randomNickname();
 
-  socket.on('resume-session', (sid) => {
-    if (isBanned(ip)) { socket.emit('banned', bans[ip]); socket.disconnect(true); return; }
+  socket.on('resume-session', async (sid) => {
+    if (await isBanned(ip)) { socket.emit('banned', await getBan(ip)); socket.disconnect(true); return; }
     if (sid && (typeof sid !== 'string' || sid.length > 64)) return;
 
     if (sid && sessions.has(sid)) {
       const sess = sessions.get(sid);
       if (sess.disconnectTimer) { clearTimeout(sess.disconnectTimer); sess.disconnectTimer = null; }
       sessionId = sid;
-      nickname = sess.nickname;
       sess.socketId = socket.id;
-      socket.data.nickname = nickname;
       socket.data.sessionId = sessionId;
+      socket.data.nickname = sess.nickname;
 
       if (sess.mode === 'pair' && sess.room) {
         const partnerSid = pairings.get(sessionId);
@@ -237,7 +308,7 @@ io.on('connection', (socket) => {
           socket.join(currentRoom);
           socket.data.room = currentRoom;
           socket.data.mode = 'pair';
-          socket.emit('joined', { nickname, mode: 'pair', resumed: true });
+          socket.emit('joined', { mode: 'pair', resumed: true, nickname: socket.data.nickname, partnerNickname: partnerSess.nickname });
           io.to(currentRoom).emit('presence', 2);
           resumed = true;
         } else {
@@ -258,15 +329,14 @@ io.on('connection', (socket) => {
 
     if (!resumed) {
       sessionId = sid || crypto.randomBytes(8).toString('hex');
-      sessions.set(sessionId, { nickname, mode: null, room: null, socketId: socket.id, disconnectTimer: null });
-      socket.data.nickname = nickname;
+      sessions.set(sessionId, { nickname: socket.data.nickname, mode: null, room: null, socketId: socket.id, disconnectTimer: null });
       socket.data.sessionId = sessionId;
-      socket.emit('session', { sessionId, nickname });
+      socket.emit('session', { sessionId, nickname: socket.data.nickname });
     }
   });
 
-  socket.on('find-stranger', () => {
-    if (isBanned(ip)) { socket.emit('banned', bans[ip]); socket.disconnect(true); return; }
+  socket.on('find-stranger', async () => {
+    if (await isBanned(ip)) { socket.emit('banned', await getBan(ip)); socket.disconnect(true); return; }
     if (currentRoom) { socket.leave(currentRoom); currentRoom = null; }
     socket.data.mode = 'matching';
     if (sessionId && sessions.has(sessionId)) {
@@ -287,8 +357,8 @@ io.on('connection', (socket) => {
       if (sessionId && sessions.has(sessionId)) { const s = sessions.get(sessionId); s.mode = 'pair'; s.room = roomId; }
       if (theirSid && sessions.has(theirSid)) { const s = sessions.get(theirSid); s.mode = 'pair'; s.room = roomId; }
       currentRoom = roomId;
-      socket.emit('joined', { nickname, mode: 'pair' });
-      partnerSocket.emit('joined', { nickname: partnerSocket.data.nickname, mode: 'pair' });
+      socket.emit('joined', { mode: 'pair', nickname: socket.data.nickname, partnerNickname: partnerSocket.data.nickname });
+      partnerSocket.emit('joined', { mode: 'pair', nickname: partnerSocket.data.nickname, partnerNickname: socket.data.nickname });
       io.to(roomId).emit('system', 'stranger connected');
       io.to(roomId).emit('presence', 2);
     } else {
@@ -305,7 +375,12 @@ io.on('connection', (socket) => {
       const partnerSess = sessions.get(partnerSid);
       if (partnerSess && partnerSess.socketId) {
         const ps = io.sockets.sockets.get(partnerSess.socketId);
-        if (ps) { ps.emit('stranger-left'); ps.leave(roomId); ps.data.mode = null; ps.data.room = null; }
+        if (ps) {
+          ps.emit('stranger-left');
+          if (roomId) ps.leave(roomId);
+          ps.data.mode = null;
+          ps.data.room = null;
+        }
       }
       if (partnerSess) { partnerSess.mode = null; partnerSess.room = null; }
     }
@@ -318,6 +393,7 @@ io.on('connection', (socket) => {
   }
 
   socket.on('skip-stranger', () => handleStrangerLeave(socket, true));
+
   socket.on('cancel-search', () => {
     const idx = waitingQueue.indexOf(socket.id);
     if (idx !== -1) waitingQueue.splice(idx, 1);
@@ -331,31 +407,38 @@ io.on('connection', (socket) => {
 
   socket.on('exit-session', () => {
     if (socket.data.mode === 'pair') handleStrangerLeave(socket, false);
+    const idx = waitingQueue.indexOf(socket.id);
+    if (idx !== -1) waitingQueue.splice(idx, 1);
     if (sessionId && sessions.has(sessionId)) {
       const sess = sessions.get(sessionId);
       if (sess.disconnectTimer) clearTimeout(sess.disconnectTimer);
       sessions.delete(sessionId);
     }
-    const idx = waitingQueue.indexOf(socket.id);
-    if (idx !== -1) waitingQueue.splice(idx, 1);
     currentRoom = null; socket.data.mode = null; socket.data.room = null;
     socketRateLimits.delete(socket.id);
   });
 
-  socket.on('message', (data) => {
-    if (isBanned(ip)) { socket.emit('banned', bans[ip]); socket.disconnect(true); return; }
+  socket.on('message', async (data) => {
+    if (await isBanned(ip)) { socket.emit('banned', await getBan(ip)); socket.disconnect(true); return; }
     if (!checkMsgRate(socket.id)) { socket.emit('system', 'sending too fast, slow down'); return; }
     const room = socket.data.room;
     if (!room) return;
     const rawText = (data.text || '').toString();
     const image = (typeof data.image === 'string' && data.image.startsWith('/uploads/')) ? data.image.slice(0,200) : null;
 
+    if (detectSevere(rawText)) {
+      await instantPermanentBan(ip);
+      socket.emit('banned', { permanent: true, severe: true });
+      socket.disconnect(true);
+      return;
+    }
+
     if (detectThreat(rawText)) {
-      const result = recordOffense(ip);
+      const result = await recordOffense(ip);
       if (result.action === 'warn') {
         socket.emit('moderation-warning', { message: 'That message violates our rules around threats of violence. This is a warning - a second violation will result in a ban.' });
       } else {
-        socket.emit('banned', { offenses: bans[ip].offenses, bannedUntil: result.until, permanent: result.permanent });
+        socket.emit('banned', { bannedUntil: result.until, permanent: result.permanent });
         socket.disconnect(true);
       }
       return;
@@ -365,15 +448,17 @@ io.on('connection', (socket) => {
     if (!text && !image) return;
     const msg = {
       id: crypto.randomBytes(6).toString('hex'),
-      from: nickname, text, image,
+      nickname: socket.data.nickname,
+      text, image,
       time: Date.now()
     };
-    io.to(room).emit('message', msg);
+    socket.to(room).emit('message', { ...msg, mine: false });
+    socket.emit('message', { ...msg, mine: true });
   });
 
   socket.on('typing', () => {
     const room = socket.data.room;
-    if (room) socket.to(room).emit('typing', nickname);
+    if (room) socket.to(room).emit('typing');
   });
 
   socket.on('disconnect', () => {
@@ -390,7 +475,12 @@ io.on('connection', (socket) => {
           const ps = sessions.get(partnerSid);
           if (ps && ps.socketId) {
             const psock = io.sockets.sockets.get(ps.socketId);
-            if (psock) { psock.emit('stranger-left'); if (sess.room) psock.leave(sess.room); psock.data.mode = null; psock.data.room = null; }
+            if (psock) {
+              psock.emit('stranger-left');
+              if (sess.room) psock.leave(sess.room);
+              psock.data.mode = null;
+              psock.data.room = null;
+            }
           }
           if (ps) { ps.mode = null; ps.room = null; }
         }
