@@ -9,10 +9,16 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const xss = require('xss');
 const { Redis } = require('@upstash/redis');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
+
+app.use(express.json({ limit: '100kb' }));
+app.use(cookieParser());
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -30,6 +36,8 @@ app.use(helmet({
 const limiter = rateLimit({ windowMs: 60*1000, max: 60, message: { error: 'Too many requests.' } });
 app.use('/upload', limiter);
 
+const loginLimiter = rateLimit({ windowMs: 15*60*1000, max: 10, message: { error: 'Too many login attempts, try again later.' } });
+
 const io = new Server(server, {
   maxHttpBufferSize: 2e6,
   cors: { origin: false },
@@ -46,26 +54,38 @@ if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) 
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
   });
-  console.log('Upstash Redis connected - bans will persist across restarts');
+  console.log('Upstash Redis connected');
 } else {
-  console.warn('UPSTASH credentials missing - bans will NOT persist across restarts (in-memory fallback)');
+  console.warn('UPSTASH credentials missing - bans/admin/logs will NOT persist (in-memory fallback)');
 }
 
 const memBans = new Map();
+const memWords = { severe: [], threat: [] };
+const memLogs = [];
 
 async function getBan(ip) {
-  if (redis) {
-    const data = await redis.get('ban:' + ip);
-    return data || null;
-  }
+  if (redis) return (await redis.get('ban:' + ip)) || null;
   return memBans.get(ip) || null;
 }
 async function setBan(ip, rec) {
+  if (redis) await redis.set('ban:' + ip, rec);
+  else memBans.set(ip, rec);
+}
+async function deleteBan(ip) {
+  if (redis) await redis.del('ban:' + ip);
+  else memBans.delete(ip);
+}
+async function listBans() {
   if (redis) {
-    await redis.set('ban:' + ip, rec);
-  } else {
-    memBans.set(ip, rec);
+    const keys = await redis.keys('ban:*');
+    const results = [];
+    for (const k of keys) {
+      const rec = await redis.get(k);
+      if (rec) results.push({ ip: k.replace('ban:', ''), ...rec });
+    }
+    return results;
   }
+  return Array.from(memBans.entries()).map(([ip, rec]) => ({ ip, ...rec }));
 }
 
 function getClientIp(req) {
@@ -92,7 +112,6 @@ async function recordOffense(ip) {
   let rec = await getBan(ip);
   if (!rec) rec = { offenses: 0, bannedUntil: 0, warned: false };
   rec.offenses += 1;
-
   if (rec.offenses === 1) {
     rec.warned = true;
     await setBan(ip, rec);
@@ -104,68 +123,203 @@ async function recordOffense(ip) {
   return { action: 'ban', permanent: duration === null, until: rec.bannedUntil };
 }
 
-async function instantPermanentBan(ip) {
+async function instantPermanentBan(ip, reason) {
   let rec = await getBan(ip);
   if (!rec) rec = { offenses: 0, bannedUntil: 0, warned: false };
   rec.offenses += 10;
   rec.bannedUntil = null;
+  rec.reason = reason || rec.reason;
   await setBan(ip, rec);
 }
 
-const ADMIN_KEY = process.env.ADMIN_KEY || null;
-
-app.get('/admin/unban', async (req, res) => {
-  if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) return res.status(403).send('forbidden');
-  const ip = req.query.ip || getClientIp(req);
-  if (redis) await redis.del('ban:' + ip);
-  else memBans.delete(ip);
-  res.send('unbanned: ' + ip);
-});
-
-app.get('/admin/banstatus', async (req, res) => {
-  if (!ADMIN_KEY || req.query.key !== ADMIN_KEY) return res.status(403).send('forbidden');
-  const ip = req.query.ip || getClientIp(req);
-  const rec = await getBan(ip);
-  res.json({ ip, record: rec || null });
-});
-
-const SEVERE_PATTERNS = [
-  /child\s*p[o0]rn/i,
-  /\bcp\b.{0,15}\b(pic|video|link|trade|share)/i,
-  /\bloli(ta)?\b.{0,10}\b(sex|nude|porn)/i,
-  /\bunderage\b.{0,15}\b(sex|nude|porn|pic)/i,
-  /\bchild\b.{0,15}\b(sex|nude|porn|abuse)/i,
-  /\bminor\b.{0,15}\b(sex|nude|porn)/i,
-  /\bpedo/i,
+const DEFAULT_SEVERE_WORDS = [
+  'child porn', 'childporn', 'cp pic', 'cp video', 'lolita sex', 'underage sex',
+  'underage nude', 'child sex', 'child abuse', 'minor sex', 'minor nude', 'pedo'
 ];
+const DEFAULT_THREAT_PHRASES = [
+  'ill kill you', 'i will kill you', 'i gonna kill you', 'gonna kill you', 'kill you',
+  'kill yourself', 'kys', 'ill murder you', 'i will murder you', 'gonna murder you',
+  'murder you', 'behead you', 'beheading', 'hunt you down', 'how to make a bomb',
+  'how to kill someone', 'i want to kill', 'gonna shoot up', 'i will bomb',
+  'stab you', 'shoot you', 'slaughter', 'massacre'
+];
+
+async function getWordList(kind) {
+  if (redis) {
+    const data = await redis.get('words:' + kind);
+    if (data && Array.isArray(data)) return data;
+    const defaults = kind === 'severe' ? DEFAULT_SEVERE_WORDS : DEFAULT_THREAT_PHRASES;
+    await redis.set('words:' + kind, defaults);
+    return defaults;
+  }
+  if (memWords[kind].length === 0) {
+    memWords[kind] = kind === 'severe' ? [...DEFAULT_SEVERE_WORDS] : [...DEFAULT_THREAT_PHRASES];
+  }
+  return memWords[kind];
+}
+async function setWordList(kind, list) {
+  if (redis) await redis.set('words:' + kind, list);
+  else memWords[kind] = list;
+}
+
+let severeWordsCache = [...DEFAULT_SEVERE_WORDS];
+let threatWordsCache = [...DEFAULT_THREAT_PHRASES];
+async function refreshWordCaches() {
+  severeWordsCache = await getWordList('severe');
+  threatWordsCache = await getWordList('threat');
+}
+refreshWordCaches();
+setInterval(refreshWordCaches, 30000);
+
+function normalizeForThreatCheck(text) {
+  let t = text.toLowerCase();
+  t = t.replace(/'/g, '');
+  t = t.replace(/!/g, 'i').replace(/1/g, 'i').replace(/0/g, 'o').replace(/3/g, 'e').replace(/4/g, 'a').replace(/7/g, 't').replace(/5/g, 's').replace(/@/g, 'a');
+  t = t.replace(/[^a-z0-9\s]/g, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+}
 
 function detectSevere(text) {
-  return SEVERE_PATTERNS.some(p => p.test(text));
+  const norm = normalizeForThreatCheck(text);
+  return severeWordsCache.some(w => norm.includes(normalizeForThreatCheck(w)));
 }
-
-const THREAT_PATTERNS = [
-  /\bi\s*(?:will|'?ll|am going to|gonna)\s*(?:kill|murder|stab|shoot|hurt|beat|rape)\s*(?:you|him|her|them|u)\b/i,
-  /\bkill\s*(?:yourself|urself|ur ?self)\b/i,
-  /\bkys\b/i,
-  /\bi\s*(?:will|'?ll)\s*(?:find|hunt)\s*you\s*(?:down)?\s*and\s*(?:kill|hurt|kill you)\b/i,
-  /\bgonna\s*shoot\s*up\b/i,
-  /\bi\s*(?:will|'?ll)\s*bomb\b/i,
-  /\bhow\s*to\s*(?:make|build)\s*a\s*bomb\b/i,
-  /\bhow\s*to\s*kill\s*(?:someone|a person|people)\b/i,
-  /\bmurder\b/i,
-  /\bbeheading\b/i,
-  /\bbehead(?:ing)?\s*(?:you|him|her|them|u)?\b/i,
-  /\bi'?ll?\s*murder\b/i,
-  /\bgonna\s*murder\b/i,
-  /\bslaughter\b/i,
-  /\bmassacre\b/i,
-  /\bi\s*want\s*to\s*kill\b/i,
-  /\b(?:k|c)\s*[i1!]\s*ll\b.{0,10}\b(you|u|him|her|them)\b/i,
-];
-
 function detectThreat(text) {
-  return THREAT_PATTERNS.some(p => p.test(text));
+  const norm = normalizeForThreatCheck(text);
+  return threatWordsCache.some(w => norm.includes(normalizeForThreatCheck(w)));
 }
+
+const LOG_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+async function logMessage(entry) {
+  if (redis) {
+    const key = 'logs:' + Date.now() + ':' + crypto.randomBytes(4).toString('hex');
+    await redis.set(key, entry, { ex: 86400 });
+  } else {
+    memLogs.push({ ...entry, _key: Date.now() });
+    const cutoff = Date.now() - LOG_RETENTION_MS;
+    while (memLogs.length && memLogs[0]._key < cutoff) memLogs.shift();
+    if (memLogs.length > 1000) memLogs.shift();
+  }
+}
+async function getRecentLogs(limit) {
+  if (redis) {
+    const keys = await redis.keys('logs:*');
+    keys.sort().reverse();
+    const slice = keys.slice(0, limit || 200);
+    const results = [];
+    for (const k of slice) {
+      const v = await redis.get(k);
+      if (v) results.push(v);
+    }
+    return results;
+  }
+  return memLogs.slice(-(limit || 200)).reverse();
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
+async function getAdminUser(username) {
+  if (redis) return await redis.get('admin:user:' + username.toLowerCase());
+  return null;
+}
+
+function requireAdmin(req, res, next) {
+  const token = req.cookies.admin_token;
+  if (!token) return res.status(401).json({ error: 'not authenticated' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.admin = payload;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'invalid or expired session' });
+  }
+}
+
+app.post('/admin/api/login', loginLimiter, async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  const user = await getAdminUser(username);
+  if (!user) return res.status(401).json({ error: 'invalid credentials' });
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+
+  const token = jwt.sign({ username: user.username }, JWT_SECRET, { expiresIn: '12h' });
+  res.cookie('admin_token', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    maxAge: 12 * 60 * 60 * 1000,
+  });
+  res.json({ ok: true });
+});
+
+app.post('/admin/api/logout', (req, res) => {
+  res.clearCookie('admin_token');
+  res.json({ ok: true });
+});
+
+app.get('/admin/api/me', requireAdmin, (req, res) => {
+  res.json({ username: req.admin.username });
+});
+
+app.get('/admin/api/overview', requireAdmin, async (req, res) => {
+  const activeSessions = Array.from(sessions.entries()).map(([sid, s]) => ({
+    sessionId: sid,
+    nickname: s.nickname,
+    mode: s.mode,
+    connected: !!s.socketId && !!io.sockets.sockets.get(s.socketId),
+  }));
+  const bans = await listBans();
+  res.json({
+    activeSessions,
+    waitingCount: waitingQueue.length,
+    totalConnections: io.sockets.sockets.size,
+    bans,
+  });
+});
+
+app.post('/admin/api/ban', requireAdmin, async (req, res) => {
+  const { ip, durationHours, permanent, reason } = req.body || {};
+  if (!ip) return res.status(400).json({ error: 'ip required' });
+  const rec = { offenses: 99, warned: true, reason: reason || 'manual admin ban' };
+  rec.bannedUntil = permanent ? null : Date.now() + (Number(durationHours) || 24) * 60 * 60 * 1000;
+  await setBan(ip, rec);
+  res.json({ ok: true });
+});
+
+app.post('/admin/api/unban', requireAdmin, async (req, res) => {
+  const { ip } = req.body || {};
+  if (!ip) return res.status(400).json({ error: 'ip required' });
+  await deleteBan(ip);
+  res.json({ ok: true });
+});
+
+app.get('/admin/api/words', requireAdmin, async (req, res) => {
+  res.json({
+    severe: await getWordList('severe'),
+    threat: await getWordList('threat'),
+  });
+});
+
+app.post('/admin/api/words', requireAdmin, async (req, res) => {
+  const { kind, list } = req.body || {};
+  if (kind !== 'severe' && kind !== 'threat') return res.status(400).json({ error: 'invalid kind' });
+  if (!Array.isArray(list)) return res.status(400).json({ error: 'list must be an array' });
+  const cleaned = list.map(w => String(w).slice(0, 100)).filter(Boolean).slice(0, 500);
+  await setWordList(kind, cleaned);
+  await refreshWordCaches();
+  res.json({ ok: true, count: cleaned.length });
+});
+
+app.get('/admin/api/logs', requireAdmin, async (req, res) => {
+  const logs = await getRecentLogs(300);
+  res.json({ logs });
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
 
 const IMAGE_SIGNATURES = [
   [0xFF,0xD8,0xFF],
@@ -202,7 +356,6 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true }
 app.post('/upload', async (req, res) => {
   const ip = getClientIp(req);
   if (await isBanned(ip)) return res.status(403).json({ error: 'banned' });
-
   upload.single('image')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
     if (!req.file) return res.status(400).json({ error: 'No image' });
@@ -254,7 +407,8 @@ function tryMatch(socket) {
   while (waitingQueue.length) {
     const candidateId = waitingQueue[0];
     const candidateSocket = io.sockets.sockets.get(candidateId);
-    if (!candidateSocket || candidateId === socket.id || candidateSocket.data.mode !== 'matching') {
+    const sameSession = candidateSocket && socket.data.sessionId && candidateSocket.data.sessionId === socket.data.sessionId;
+    if (!candidateSocket || candidateId === socket.id || candidateSocket.data.mode !== 'matching' || sameSession) {
       waitingQueue.shift();
       continue;
     }
@@ -345,6 +499,13 @@ io.on('connection', (socket) => {
       s.room = null;
     }
 
+    for (let i = waitingQueue.length - 1; i >= 0; i--) {
+      const qSocket = io.sockets.sockets.get(waitingQueue[i]);
+      if (!qSocket || (sessionId && qSocket.data.sessionId === sessionId && qSocket.id !== socket.id)) {
+        waitingQueue.splice(i, 1);
+      }
+    }
+
     const partnerSocket = tryMatch(socket);
     if (partnerSocket) {
       const roomId = pairRoomId(socket.id, partnerSocket.id);
@@ -427,7 +588,8 @@ io.on('connection', (socket) => {
     const image = (typeof data.image === 'string' && data.image.startsWith('/uploads/')) ? data.image.slice(0,200) : null;
 
     if (detectSevere(rawText)) {
-      await instantPermanentBan(ip);
+      await instantPermanentBan(ip, 'severe content: ' + rawText.slice(0, 100));
+      await logMessage({ ip, nickname: socket.data.nickname, text: rawText.slice(0, 500), time: Date.now(), flagged: 'severe' });
       socket.emit('banned', { permanent: true, severe: true });
       socket.disconnect(true);
       return;
@@ -435,6 +597,7 @@ io.on('connection', (socket) => {
 
     if (detectThreat(rawText)) {
       const result = await recordOffense(ip);
+      await logMessage({ ip, nickname: socket.data.nickname, text: rawText.slice(0, 500), time: Date.now(), flagged: 'threat' });
       if (result.action === 'warn') {
         socket.emit('moderation-warning', { message: 'That message violates our rules around threats of violence. This is a warning - a second violation will result in a ban.' });
       } else {
@@ -452,6 +615,7 @@ io.on('connection', (socket) => {
       text, image,
       time: Date.now()
     };
+    logMessage({ ip, nickname: socket.data.nickname, text: text.slice(0, 500), image, time: Date.now(), flagged: null });
     socket.to(room).emit('message', { ...msg, mine: false });
     socket.emit('message', { ...msg, mine: true });
   });

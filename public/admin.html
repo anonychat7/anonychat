@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnonyChat Admin</title>
+<style>
+  :root {
+    --bg: #0a0c0b; --bg-raised: #151816; --bg-input: #1c2019; --line: #272b27;
+    --green: #5ee9a8; --teal: #4dd4d4; --amber: #ffb454; --danger: #ff5c5c;
+    --text: #ecf2ee; --text-dim: #8a958f;
+    --mono: 'SF Mono', Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+  .hidden { display: none !important; }
+
+  #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+  .login-box { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 14px; padding: 32px; width: 100%; max-width: 360px; }
+  .login-box h1 { font-family: var(--mono); font-size: 1.3rem; margin: 0 0 24px; text-align: center; }
+  .login-box input {
+    width: 100%; background: var(--bg-input); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; color: var(--text); margin-bottom: 14px; font-size: 0.95rem; outline: none;
+  }
+  .login-box input:focus { border-color: var(--green); }
+  .login-box button {
+    width: 100%; background: var(--green); color: #06150f; border: none; border-radius: 8px;
+    padding: 13px; font-weight: 700; cursor: pointer; font-size: 0.95rem;
+  }
+  #login-error { color: var(--danger); font-size: 0.85rem; margin-top: 10px; text-align: center; min-height: 18px; }
+
+  #dashboard { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  .dash-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 10px; }
+  .dash-header h1 { font-family: var(--mono); font-size: 1.2rem; margin: 0; }
+  .logout-btn { background: var(--bg-raised); border: 1px solid var(--line); color: var(--danger); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .tab { background: var(--bg-raised); border: 1px solid var(--line); color: var(--text-dim); padding: 9px 16px; border-radius: 20px; cursor: pointer; font-size: 0.85rem; }
+  .tab.active { background: var(--green); color: #06150f; font-weight: 700; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .stat-card .num { font-size: 1.6rem; font-weight: 800; font-family: var(--mono); color: var(--green); }
+  .stat-card .label { font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--bg-raised); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 0.85rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--text-dim); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-family: var(--mono); }
+  .badge.live { background: rgba(94,233,168,0.15); color: var(--green); }
+  .badge.dead { background: rgba(138,149,143,0.15); color: var(--text-dim); }
+  .badge.flagged { background: rgba(255,92,92,0.15); color: var(--danger); }
+  .badge.warn { background: rgba(255,180,84,0.15); color: var(--amber); }
+
+  .action-btn { background: var(--bg-input); border: 1px solid var(--line); color: var(--text); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.78rem; margin-right: 6px; }
+  .action-btn.danger { color: var(--danger); }
+  .action-btn.success { color: var(--green); }
+
+  .card { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .card h3 { margin: 0 0 14px; font-family: var(--mono); font-size: 0.95rem; }
+  .row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .row input, .row select {
+    background: var(--bg-input); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; color: var(--text); font-size: 0.85rem; outline: none;
+  }
+  .row input[type=text] { flex: 1; min-width: 160px; }
+  .btn { background: var(--green); color: #06150f; border: none; border-radius: 8px; padding: 9px 16px; cursor: pointer; font-weight: 700; font-size: 0.85rem; }
+  .btn.secondary { background: var(--bg-input); color: var(--text); border: 1px solid var(--line); }
+
+  textarea {
+    width: 100%; min-height: 200px; background: var(--bg-input); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; color: var(--text); font-family: var(--mono); font-size: 0.85rem;
+    resize: vertical; outline: none;
+  }
+  .word-tag { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 16px; padding: 4px 10px; margin: 3px; font-size: 0.8rem; }
+  .word-tag button { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 0.9rem; padding: 0; }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-raised); border: 1px solid var(--green); color: var(--text); padding: 10px 20px; border-radius: 20px; font-size: 0.85rem; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 999; }
+  .toast.show { opacity: 1; }
+
+  .empty-state { color: var(--text-dim); font-size: 0.85rem; padding: 20px; text-align: center; }
+  .scroll-table { max-height: 480px; overflow-y: auto; border-radius: 12px; }
+  .msg-text { max-width: 320px; overflow-wrap: break-word; }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-box">
+    <h1>anonychat admin</h1>
+    <input type="text" id="login-username" placeholder="username" autocomplete="username">
+    <input type="password" id="login-password" placeholder="password" autocomplete="current-password">
+    <button id="login-btn">log in</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<div id="dashboard" class="hidden">
+  <div class="dash-header">
+    <h1>anonychat admin</h1>
+    <button class="logout-btn" id="logout-btn">log out</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-panel="overview">overview</button>
+    <button class="tab" data-panel="bans">bans</button>
+    <button class="tab" data-panel="words">word lists</button>
+    <button class="tab" data-panel="logs">message logs</button>
+  </div>
+
+  <div class="panel active" id="panel-overview">
+    <div class="stat-grid" id="stat-grid"></div>
+    <div class="card">
+      <h3>active sessions</h3>
+      <div class="scroll-table">
+        <table>
+          <thead><tr><th>nickname</th><th>mode</th><th>status</th></tr></thead>
+          <tbody id="sessions-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-bans">
+    <div class="card">
+      <h3>ban an ip manually</h3>
+      <div class="row">
+        <input type="text" id="ban-ip-input" placeholder="IP address">
+        <select id="ban-duration">
+          <option value="24">24 hours</option>
+          <option value="168">7 days</option>
+          <option value="permanent">permanent</option>
+        </select>
+        <button class="btn" id="ban-submit-btn">ban</button>
+      </div>
+      <div class="row">
+        <input type="text" id="ban-reason-input" placeholder="reason (optional)">
+      </div>
+    </div>
+    <div class="card">
+      <h3>current bans</h3>
+      <div class="scroll-table">
+        <table>
+          <thead><tr><th>ip</th><th>offenses</th><th>status</th><th>reason</th><th></th></tr></thead>
+          <tbody id="bans-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-words">
+    <div class="card">
+      <h3>severe / zero-tolerance words (instant permanent ban)</h3>
+      <div id="severe-tags"></div>
+      <div class="row" style="margin-top:12px">
+        <input type="text" id="severe-input" placeholder="add a phrase...">
+        <button class="btn secondary" id="severe-add-btn">add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>threat / violence words (warn then ban)</h3>
+      <div id="threat-tags"></div>
+      <div class="row" style="margin-top:12px">
+        <input type="text" id="threat-input" placeholder="add a phrase...">
+        <button class="btn secondary" id="threat-add-btn">add</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-logs">
+    <div class="card">
+      <h3>recent messages (auto-deleted after 24h)</h3>
+      <div class="scroll-table">
+        <table>
+          <thead><tr><th>time</th><th>nickname</th><th>ip</th><th>message</th><th>flag</th></tr></thead>
+          <tbody id="logs-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+(() => {
+  const loginScreen = document.getElementById('login-screen');
+  const dashboard = document.getElementById('dashboard');
+
+  function showToast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2500);
+  }
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      credentials: 'same-origin',
+    });
+    if (res.status === 401) {
+      showDashboard(false);
+      throw new Error('unauthenticated');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'request failed');
+    return data;
+  }
+
+  function showDashboard(show) {
+    loginScreen.classList.toggle('hidden', show);
+    dashboard.classList.toggle('hidden', !show);
+  }
+
+  async function checkAuth() {
+    try {
+      await api('/admin/api/me');
+      showDashboard(true);
+      loadOverview();
+    } catch {
+      showDashboard(false);
+    }
+  }
+
+  document.getElementById('login-btn').addEventListener('click', async () => {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-error');
+    errEl.textContent = '';
+    try {
+      await api('/admin/api/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+      showDashboard(true);
+      loadOverview();
+    } catch (e) {
+      errEl.textContent = e.message === 'unauthenticated' ? 'invalid credentials' : (e.message || 'login failed');
+    }
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    await api('/admin/api/logout', { method: 'POST' });
+    showDashboard(false);
+  });
+
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+      if (tab.dataset.panel === 'bans') loadBans();
+      if (tab.dataset.panel === 'words') loadWords();
+      if (tab.dataset.panel === 'logs') loadLogs();
+      if (tab.dataset.panel === 'overview') loadOverview();
+    });
+  });
+
+  async function loadOverview() {
+    try {
+      const data = await api('/admin/api/overview');
+      const statGrid = document.getElementById('stat-grid');
+      statGrid.innerHTML = `
+        <div class="stat-card"><div class="num">${data.totalConnections}</div><div class="label">total connections</div></div>
+        <div class="stat-card"><div class="num">${data.activeSessions.length}</div><div class="label">active sessions</div></div>
+        <div class="stat-card"><div class="num">${data.waitingCount}</div><div class="label">waiting in queue</div></div>
+        <div class="stat-card"><div class="num">${data.bans.length}</div><div class="label">total bans</div></div>
+      `;
+      const tbody = document.getElementById('sessions-body');
+      if (data.activeSessions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty-state">no active sessions</td></tr>';
+      } else {
+        tbody.innerHTML = data.activeSessions.map(s => `
+          <tr>
+            <td>${escapeHtml(s.nickname || '-')}</td>
+            <td>${escapeHtml(s.mode || '-')}</td>
+            <td><span class="badge ${s.connected ? 'live' : 'dead'}">${s.connected ? 'online' : 'offline'}</span></td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) {}
+  }
+
+  async function loadBans() {
+    try {
+      const data = await api('/admin/api/overview');
+      const tbody = document.getElementById('bans-body');
+      if (data.bans.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">no bans</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.bans.map(b => {
+        const status = b.bannedUntil === null ? 'permanent' : (b.bannedUntil > Date.now() ? new Date(b.bannedUntil).toLocaleString() : 'expired');
+        return `
+          <tr>
+            <td>${escapeHtml(b.ip)}</td>
+            <td>${b.offenses}</td>
+            <td><span class="badge ${b.bannedUntil === null || b.bannedUntil > Date.now() ? 'flagged' : 'dead'}">${status}</span></td>
+            <td>${escapeHtml(b.reason || '-')}</td>
+            <td><button class="action-btn success" data-unban="${escapeHtml(b.ip)}">unban</button></td>
+          </tr>
+        `;
+      }).join('');
+      tbody.querySelectorAll('[data-unban]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await api('/admin/api/unban', { method: 'POST', body: JSON.stringify({ ip: btn.dataset.unban }) });
+          showToast('unbanned ' + btn.dataset.unban);
+          loadBans();
+        });
+      });
+    } catch (e) {}
+  }
+
+  document.getElementById('ban-submit-btn').addEventListener('click', async () => {
+    const ip = document.getElementById('ban-ip-input').value.trim();
+    const duration = document.getElementById('ban-duration').value;
+    const reason = document.getElementById('ban-reason-input').value.trim();
+    if (!ip) return showToast('enter an IP first');
+    const body = { ip, reason };
+    if (duration === 'permanent') body.permanent = true;
+    else body.durationHours = Number(duration);
+    try {
+      await api('/admin/api/ban', { method: 'POST', body: JSON.stringify(body) });
+      showToast('banned ' + ip);
+      document.getElementById('ban-ip-input').value = '';
+      document.getElementById('ban-reason-input').value = '';
+      loadBans();
+    } catch (e) { showToast(e.message); }
+  });
+
+  let wordCache = { severe: [], threat: [] };
+
+  async function loadWords() {
+    try {
+      const data = await api('/admin/api/words');
+      wordCache = data;
+      renderTags('severe');
+      renderTags('threat');
+    } catch (e) {}
+  }
+
+  function renderTags(kind) {
+    const container = document.getElementById(kind + '-tags');
+    const list = wordCache[kind] || [];
+    if (list.length === 0) {
+      container.innerHTML = '<span class="empty-state" style="display:inline-block;padding:8px 0">no words yet</span>';
+      return;
+    }
+    container.innerHTML = list.map((w, i) => `
+      <span class="word-tag">${escapeHtml(w)}<button data-kind="${kind}" data-idx="${i}">×</button></span>
+    `).join('');
+    container.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const k = btn.dataset.kind;
+        const idx = Number(btn.dataset.idx);
+        wordCache[k] = wordCache[k].filter((_, i) => i !== idx);
+        await saveWords(k);
+        renderTags(k);
+      });
+    });
+  }
+
+  async function saveWords(kind) {
+    try {
+      await api('/admin/api/words', { method: 'POST', body: JSON.stringify({ kind, list: wordCache[kind] }) });
+      showToast(kind + ' list updated');
+    } catch (e) { showToast(e.message); }
+  }
+
+  document.getElementById('severe-add-btn').addEventListener('click', async () => {
+    const input = document.getElementById('severe-input');
+    const val = input.value.trim();
+    if (!val) return;
+    wordCache.severe.push(val);
+    input.value = '';
+    await saveWords('severe');
+    renderTags('severe');
+  });
+
+  document.getElementById('threat-add-btn').addEventListener('click', async () => {
+    const input = document.getElementById('threat-input');
+    const val = input.value.trim();
+    if (!val) return;
+    wordCache.threat.push(val);
+    input.value = '';
+    await saveWords('threat');
+    renderTags('threat');
+  });
+
+  async function loadLogs() {
+    try {
+      const data = await api('/admin/api/logs');
+      const tbody = document.getElementById('logs-body');
+      if (data.logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">no recent messages</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.logs.map(l => `
+        <tr>
+          <td>${new Date(l.time).toLocaleString()}</td>
+          <td>${escapeHtml(l.nickname || '-')}</td>
+          <td>${escapeHtml(l.ip || '-')}</td>
+          <td class="msg-text">${escapeHtml(l.text || (l.image ? '[image]' : ''))}</td>
+          <td>${l.flagged ? `<span class="badge flagged">${escapeHtml(l.flagged)}</span>` : ''}</td>
+        </tr>
+      `).join('');
+    } catch (e) {}
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+  }
+
+  checkAuth();
+})();
+</script>
+</body>
+</html>
