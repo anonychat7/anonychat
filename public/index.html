@@ -87,7 +87,17 @@
 
   <div id="typing-indicator" class="typing-indicator"></div>
 
+  <div id="gif-picker" class="gif-picker">
+    <div class="gif-picker-header">
+      <input type="text" id="gif-search-input" placeholder="search GIFs…" autocomplete="off">
+      <button type="button" id="gif-close-btn" class="gif-close-btn">×</button>
+    </div>
+    <div id="gif-results" class="gif-results"></div>
+    <div class="gif-attribution">Powered by GIPHY</div>
+  </div>
+
   <form id="composer" class="composer">
+    <button type="button" id="gif-btn" class="icon-btn" title="send GIF">GIF</button>
     <button type="button" id="image-btn" class="icon-btn" title="send image">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>

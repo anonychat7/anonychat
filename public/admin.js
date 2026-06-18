@@ -74,11 +74,18 @@
   async function loadOverview() {
     try {
       const data = await api('/admin/api/overview');
+      const a = data.analytics || {};
       const statGrid = document.getElementById('stat-grid');
       statGrid.innerHTML = `
-        <div class="stat-card"><div class="num">${data.totalConnections}</div><div class="label">total connections</div></div>
-        <div class="stat-card"><div class="num">${data.activeSessions.length}</div><div class="label">active sessions</div></div>
-        <div class="stat-card"><div class="num">${data.waitingCount}</div><div class="label">waiting in queue</div></div>
+        <div class="stat-card"><div class="num">${a.totalVisitorsEver ?? '-'}</div><div class="label">total visitors ever</div></div>
+        <div class="stat-card"><div class="num">${a.activeToday ?? '-'}</div><div class="label">active today</div></div>
+        <div class="stat-card"><div class="num">${a.activeThisWeek ?? '-'}</div><div class="label">active this week</div></div>
+        <div class="stat-card"><div class="num">${data.activeSessions.length}</div><div class="label">online right now</div></div>
+        <div class="stat-card"><div class="num">${a.peakConcurrent ?? '-'}</div><div class="label">peak concurrent</div></div>
+        <div class="stat-card"><div class="num">${a.pairingsTotal ?? '-'}</div><div class="label">total pairings</div></div>
+        <div class="stat-card"><div class="num">${a.messagesToday ?? '-'}</div><div class="label">messages today</div></div>
+        <div class="stat-card"><div class="num">${a.messagesTotal ?? '-'}</div><div class="label">messages total</div></div>
+        <div class="stat-card"><div class="num">${data.waitingCount}</div><div class="label">in queue</div></div>
         <div class="stat-card"><div class="num">${data.bans.length}</div><div class="label">total bans</div></div>
       `;
       const tbody = document.getElementById('sessions-body');

@@ -26,7 +26,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:"],
+      imgSrc: ["'self'", "data:", "blob:", "https://*.giphy.com"],
       connectSrc: ["'self'", "ws:", "wss:"],
       fontSrc: ["'self'"],
     }
@@ -217,6 +217,60 @@ async function getRecentLogs(limit) {
   return memLogs.slice(-(limit || 200)).reverse();
 }
 
+// ---------- Analytics ----------
+function dayKey(d = new Date()) { return d.toISOString().slice(0, 10); }
+
+async function trackNewVisitor(sessionId) {
+  if (!redis) return;
+  await redis.sadd('analytics:all_sessions', sessionId);
+  await redis.sadd('analytics:daily:' + dayKey(), sessionId);
+}
+async function trackMessage() {
+  if (!redis) return;
+  await redis.incr('analytics:messages_total');
+  await redis.incr('analytics:messages:' + dayKey());
+}
+async function trackPairing() {
+  if (!redis) return;
+  await redis.incr('analytics:pairings_total');
+}
+async function trackPeakConcurrent(current) {
+  if (!redis) return;
+  const peak = Number(await redis.get('analytics:peak_concurrent')) || 0;
+  if (current > peak) await redis.set('analytics:peak_concurrent', current);
+}
+
+async function getAnalytics() {
+  if (!redis) {
+    return {
+      totalVisitorsEver: sessions.size,
+      activeToday: io.sockets.sockets.size,
+      activeThisWeek: io.sockets.sockets.size,
+      messagesTotal: 0,
+      messagesToday: 0,
+      pairingsTotal: 0,
+      peakConcurrent: io.sockets.sockets.size,
+    };
+  }
+  const totalVisitorsEver = await redis.scard('analytics:all_sessions');
+  const activeToday = await redis.scard('analytics:daily:' + dayKey());
+
+  const weekSet = new Set();
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const members = await redis.smembers('analytics:daily:' + dayKey(d));
+    members.forEach(m => weekSet.add(m));
+  }
+
+  const messagesTotal = Number(await redis.get('analytics:messages_total')) || 0;
+  const messagesToday = Number(await redis.get('analytics:messages:' + dayKey())) || 0;
+  const pairingsTotal = Number(await redis.get('analytics:pairings_total')) || 0;
+  const peakConcurrent = Number(await redis.get('analytics:peak_concurrent')) || 0;
+
+  return { totalVisitorsEver, activeToday, activeThisWeek: weekSet.size, messagesTotal, messagesToday, pairingsTotal, peakConcurrent };
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 async function getAdminUser(username) {
@@ -271,11 +325,13 @@ app.get('/admin/api/overview', requireAdmin, async (req, res) => {
     connected: !!s.socketId && !!io.sockets.sockets.get(s.socketId),
   }));
   const bans = await listBans();
+  const analytics = await getAnalytics();
   res.json({
     activeSessions,
     waitingCount: waitingQueue.length,
     totalConnections: io.sockets.sockets.size,
     bans,
+    analytics,
   });
 });
 
@@ -366,6 +422,34 @@ app.post('/upload', async (req, res) => {
     }
     res.json({ url: '/uploads/' + req.file.filename });
   });
+});
+
+// ---------- GIPHY proxy (keeps API key server-side, never exposed to browser) ----------
+const gifLimiter = rateLimit({ windowMs: 60*1000, max: 30, message: { error: 'Too many GIF searches, slow down.' } });
+
+app.get('/gif/search', gifLimiter, async (req, res) => {
+  const ip = getClientIp(req);
+  if (await isBanned(ip)) return res.status(403).json({ error: 'banned' });
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: 'GIF search not configured' });
+
+  const q = (req.query.q || '').toString().slice(0, 100);
+  const url = q
+    ? `https://api.giphy.com/v1/gifs/search?api_key=${apiKey}&q=${encodeURIComponent(q)}&limit=24&rating=pg-13`
+    : `https://api.giphy.com/v1/gifs/trending?api_key=${apiKey}&limit=24&rating=pg-13`;
+
+  try {
+    const giphyRes = await fetch(url);
+    const data = await giphyRes.json();
+    const gifs = (data.data || []).map(g => ({
+      id: g.id,
+      preview: g.images.fixed_height_small?.url || g.images.fixed_height?.url,
+      full: g.images.fixed_height?.url || g.images.original?.url,
+    }));
+    res.json({ gifs });
+  } catch (e) {
+    res.status(502).json({ error: 'GIF service unavailable' });
+  }
 });
 
 const waitingQueue = [];
@@ -486,6 +570,8 @@ io.on('connection', (socket) => {
       sessions.set(sessionId, { nickname: socket.data.nickname, mode: null, room: null, socketId: socket.id, disconnectTimer: null });
       socket.data.sessionId = sessionId;
       socket.emit('session', { sessionId, nickname: socket.data.nickname });
+      await trackNewVisitor(sessionId);
+      await trackPeakConcurrent(io.sockets.sockets.size);
     }
   });
 
@@ -522,6 +608,7 @@ io.on('connection', (socket) => {
       partnerSocket.emit('joined', { mode: 'pair', nickname: partnerSocket.data.nickname, partnerNickname: socket.data.nickname });
       io.to(roomId).emit('system', 'stranger connected');
       io.to(roomId).emit('presence', 2);
+      await trackPairing();
     } else {
       waitingQueue.push(socket.id);
       socket.emit('searching');
@@ -585,7 +672,7 @@ io.on('connection', (socket) => {
     const room = socket.data.room;
     if (!room) return;
     const rawText = (data.text || '').toString();
-    const image = (typeof data.image === 'string' && data.image.startsWith('/uploads/')) ? data.image.slice(0,200) : null;
+    const image = (typeof data.image === 'string' && (data.image.startsWith('/uploads/') || (data.image.startsWith('https://media') && data.image.includes('.giphy.com')))) ? data.image.slice(0,300) : null;
 
     if (detectSevere(rawText)) {
       await instantPermanentBan(ip, 'severe content: ' + rawText.slice(0, 100));
@@ -616,6 +703,7 @@ io.on('connection', (socket) => {
       time: Date.now()
     };
     logMessage({ ip, nickname: socket.data.nickname, text: text.slice(0, 500), image, time: Date.now(), flagged: null });
+    await trackMessage();
     socket.to(room).emit('message', { ...msg, mine: false });
     socket.emit('message', { ...msg, mine: true });
   });

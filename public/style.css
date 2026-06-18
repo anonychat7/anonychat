@@ -375,3 +375,67 @@ img {
   -webkit-user-drag: none;
   -webkit-touch-callout: none;
 }
+
+/* ---------- GIF PICKER ---------- */
+.gif-picker {
+  display: none;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--line);
+  max-height: 320px;
+}
+.gif-picker.active { display: flex; }
+.gif-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.gif-picker-header input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 9px 14px;
+  color: var(--text);
+  font-size: 0.88rem;
+  outline: none;
+}
+.gif-close-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.gif-results {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.gif-results img {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--bg-input);
+}
+.gif-attribution {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  padding: 4px 0 8px;
+}
+.gif-btn-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+}

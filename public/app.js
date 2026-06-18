@@ -34,12 +34,12 @@
   function clearSessionId() { try { localStorage.removeItem('anonychat-session'); } catch {} }
 
   const SEARCH_LINES = [
-    'looking for someone to talk to…',
-    'scanning the crowd…',
-    'still searching…',
-    'this might take a moment…',
-    'almost there…',
-    'finding someone new…',
+    'looking for someone to talk to...',
+    'scanning the crowd...',
+    'still searching...',
+    'this might take a moment...',
+    'almost there...',
+    'finding someone new...',
   ];
   let searchLineInterval = null;
   function startSearchLines() {
@@ -109,7 +109,7 @@
 
     socket.on('stranger-left', () => {
       showToast('stranger disconnected');
-      renderSystem('the stranger left. finding someone new…');
+      renderSystem('the stranger left. finding someone new...');
       socket.emit('find-stranger');
     });
 
@@ -119,7 +119,7 @@
 
     socket.on('typing', () => {
       const el = document.getElementById('typing-indicator');
-      el.textContent = partnerNickname + ' is typing…';
+      el.textContent = partnerNickname + ' is typing...';
       clearTimeout(typingTimeout);
       typingTimeout = setTimeout(() => { el.textContent = ''; }, 1800);
     });
@@ -148,7 +148,7 @@
       msgEl.textContent = "You've been permanently banned from AnonyChat for repeated violations of our rules against threats of violence.";
     } else if (info.bannedUntil) {
       const until = new Date(info.bannedUntil);
-      msgEl.textContent = "You've been temporarily banned from AnonyChat until " + until.toLocaleString() + " due to a violation of our rules against threats of violence.";
+      msgEl.textContent = "You've been temporarily banned from AnonyChat until " + until.toLocaleString() + " due to a violation of our rules.";
     } else {
       msgEl.textContent = "You've been restricted from AnonyChat due to a violation of our rules.";
     }
@@ -171,7 +171,7 @@
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
     const time = new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.textContent = (msg.mine ? 'you' : (msg.nickname || partnerNickname)) + ' · ' + time;
+    meta.textContent = (msg.mine ? 'you' : (msg.nickname || partnerNickname)) + ' . ' + time;
     wrap.appendChild(meta);
 
     if (msg.image) {
@@ -232,6 +232,53 @@
   const imageBtn = document.getElementById('image-btn');
   const imageInput = document.getElementById('image-input');
   const imagePreview = document.getElementById('image-preview');
+  const gifBtn = document.getElementById('gif-btn');
+  const gifPicker = document.getElementById('gif-picker');
+  const gifSearchInput = document.getElementById('gif-search-input');
+  const gifResults = document.getElementById('gif-results');
+  const gifCloseBtn = document.getElementById('gif-close-btn');
+
+  let gifSearchTimeout = null;
+
+  async function searchGifs(query) {
+    gifResults.innerHTML = '<span style="grid-column:1/-1;text-align:center;color:var(--text-dim);font-size:0.8rem;padding:20px">loading...</span>';
+    try {
+      const res = await fetch('/gif/search?q=' + encodeURIComponent(query || ''));
+      const data = await res.json();
+      if (!data.gifs || data.gifs.length === 0) {
+        gifResults.innerHTML = '<span style="grid-column:1/-1;text-align:center;color:var(--text-dim);font-size:0.8rem;padding:20px">no GIFs found</span>';
+        return;
+      }
+      gifResults.innerHTML = '';
+      data.gifs.forEach(g => {
+        const img = document.createElement('img');
+        img.src = g.preview;
+        img.loading = 'lazy';
+        img.addEventListener('click', () => sendGif(g.full));
+        gifResults.appendChild(img);
+      });
+    } catch {
+      gifResults.innerHTML = '<span style="grid-column:1/-1;text-align:center;color:var(--text-dim);font-size:0.8rem;padding:20px">GIF search unavailable</span>';
+    }
+  }
+
+  function sendGif(url) {
+    if (!socket) return;
+    socket.emit('message', { text: '', image: url });
+    gifPicker.classList.remove('active');
+    gifSearchInput.value = '';
+  }
+
+  gifBtn.addEventListener('click', () => {
+    const opening = !gifPicker.classList.contains('active');
+    gifPicker.classList.toggle('active');
+    if (opening) searchGifs('');
+  });
+  gifCloseBtn.addEventListener('click', () => gifPicker.classList.remove('active'));
+  gifSearchInput.addEventListener('input', () => {
+    clearTimeout(gifSearchTimeout);
+    gifSearchTimeout = setTimeout(() => searchGifs(gifSearchInput.value.trim()), 400);
+  });
 
   textInput.addEventListener('input', () => { if (socket) socket.emit('typing'); });
   imageBtn.addEventListener('click', () => imageInput.click());
@@ -240,7 +287,7 @@
     const file = imageInput.files[0];
     if (!file) return;
     if (file.size > 4 * 1024 * 1024) { showToast('image too large (max 4MB)'); imageInput.value = ''; return; }
-    showToast('uploading…');
+    showToast('uploading...');
     const fd = new FormData();
     fd.append('image', file);
     try {
@@ -282,6 +329,7 @@
     imagePreview.classList.remove('active');
     imagePreview.innerHTML = '';
     imageInput.value = '';
+    gifPicker.classList.remove('active');
   });
 
   const lightbox = document.getElementById('lightbox');
