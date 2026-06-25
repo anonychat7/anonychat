@@ -3,3 +3,4 @@ public/uploads/*
 !public/uploads/.gitkeep
 *.log
 .env.admin-setup
+.env
